@@ -382,3 +382,4 @@ pyrightconfig.json
 .idea
 /docs
 /doxygen-awesome-css
+px4_msgs/
