@@ -8,10 +8,13 @@
 #include <optional>
 #include <px4_ros2/components/mode.hpp>
 #include <px4_ros2/control/setpoint_types/multicopter/goto.hpp>
+#include <px4_ros2/control/setpoint_types/experimental/rover/position.hpp>
 #include <px4_ros2/mission/mission.hpp>
 #include <px4_ros2/mission/trajectory/trajectory_executor.hpp>
 #include <px4_ros2/odometry/attitude.hpp>
 #include <px4_ros2/odometry/global_position.hpp>
+#include <px4_ros2/vehicle_state/vehicle_status.hpp>
+#include <std_msgs/msg/u_int16.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 /** \ingroup mission_multicopter
@@ -20,7 +23,7 @@
 
 namespace px4_ros2::multicopter {
 /**
- * @brief Trajectory executor using goto setpoints
+ * @brief Trajectory executor using goto setpoints (supports multicopter and rover)
  * @ingroup mission_multicopter
  */
 class WaypointTrajectoryExecutor : public TrajectoryExecutorInterface {
@@ -38,14 +41,20 @@ class WaypointTrajectoryExecutor : public TrajectoryExecutorInterface {
   void continueNextItem();
   bool positionReached(const Eigen::Vector3d& target_position_m, float acceptance_radius) const;
   bool headingReached(float target_heading_rad) const;
+  bool isRover() const;
+  void missionCurrentCallback(std_msgs::msg::UInt16::ConstSharedPtr msg);
 
   TrajectoryConfig _current_trajectory;
   const float _acceptance_radius;
   std::shared_ptr<OdometryGlobalPosition> _vehicle_global_position;
   std::shared_ptr<OdometryAttitude> _vehicle_attitude;
-  std::shared_ptr<MulticopterGotoGlobalSetpointType> _setpoint;
+  std::shared_ptr<VehicleStatus> _vehicle_status;
+  std::shared_ptr<MulticopterGotoGlobalSetpointType> _multicopter_setpoint;
+  std::shared_ptr<RoverPositionSetpointType> _rover_setpoint;
+  std::unique_ptr<MapProjection> _map_projection;
   std::optional<int> _current_index;
   rclcpp::Node& _node;
+  rclcpp::Subscription<std_msgs::msg::UInt16>::SharedPtr _mission_current_sub;
 };
 
 }  // namespace px4_ros2::multicopter

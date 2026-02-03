@@ -4,6 +4,7 @@
  ****************************************************************************/
 
 #include <px4_ros2/mission/trajectory/multicopter/waypoint_trajectory_executor.hpp>
+#include <px4_ros2/utils/message_version.hpp>
 
 using namespace px4_ros2::literals;  // NOLINT
 
@@ -11,9 +12,20 @@ namespace px4_ros2::multicopter {
 WaypointTrajectoryExecutor::WaypointTrajectoryExecutor(ModeBase& mode, float acceptance_radius)
     : _acceptance_radius(acceptance_radius), _node(mode.node())
 {
-  _setpoint = std::make_shared<MulticopterGotoGlobalSetpointType>(mode);
+  _multicopter_setpoint = std::make_shared<MulticopterGotoGlobalSetpointType>(mode);
+  _rover_setpoint = std::make_shared<RoverPositionSetpointType>(mode);
   _vehicle_global_position = std::make_shared<OdometryGlobalPosition>(mode);
   _vehicle_attitude = std::make_shared<OdometryAttitude>(mode);
+  _vehicle_status = std::make_shared<VehicleStatus>(mode);
+  _map_projection = std::make_unique<MapProjection>(mode);
+  
+  // Subscribe to mission current waypoint from mission_manager
+  _mission_current_sub = mode.node().create_subscription<std_msgs::msg::UInt16>(
+      "/mission/current_waypoint",
+      rclcpp::QoS(10),
+      [this](std_msgs::msg::UInt16::ConstSharedPtr msg) {
+        missionCurrentCallback(msg);
+      });
 }
 
 bool WaypointTrajectoryExecutor::navigationItemTypeSupported(NavigationItemType type)
@@ -63,8 +75,25 @@ void WaypointTrajectoryExecutor::updateSetpoint()
   }
 
   const auto& options = _current_trajectory.options;
-  _setpoint->update(target_position, heading_target_rad, options.horizontal_velocity,
-                    options.vertical_velocity, options.max_heading_rate);
+  
+  if (isRover()) {
+    RCLCPP_DEBUG(_node.get_logger(), "[DEBUG] Rover mode detected - using rover position setpoint");
+    
+    // Rover: Use 2D position setpoint with local NED coordinates
+    // Convert global target (lat, lon, alt) to local NED (north, east)
+    Eigen::Vector2f target_local_2d = _map_projection->globalToLocal(
+        Eigen::Vector2d(target_position[0], target_position[1]));
+    
+    // Use horizontal velocity as cruising speed
+    std::optional<float> cruising_speed = options.horizontal_velocity;
+    std::optional<float> arrival_speed = std::nullopt;  // Stop at waypoint
+    
+    _rover_setpoint->update(target_local_2d, std::nullopt, cruising_speed, arrival_speed, heading_target_rad);
+  } else {
+    // Multicopter: Use 3D goto setpoint with global coordinates
+    _multicopter_setpoint->update(target_position, heading_target_rad, options.horizontal_velocity,
+                                  options.vertical_velocity, options.max_heading_rate);
+  }
 
   float acceptance_radius = _acceptance_radius;
   if (*_current_index == _current_trajectory.end_index && _current_trajectory.stop_at_last) {
@@ -100,6 +129,38 @@ bool WaypointTrajectoryExecutor::headingReached(float target_heading_rad) const
   static constexpr float kHeadingErrorThreshold = 7.0_deg;
   const float heading_error_wrapped = wrapPi(target_heading_rad - _vehicle_attitude->yaw());
   return fabsf(heading_error_wrapped) < kHeadingErrorThreshold;
+}
+
+bool WaypointTrajectoryExecutor::isRover() const
+{
+  return _vehicle_status->last().vehicle_type == px4_msgs::msg::VehicleStatus::VEHICLE_TYPE_ROVER;
+}
+
+void WaypointTrajectoryExecutor::missionCurrentCallback(
+    std_msgs::msg::UInt16::ConstSharedPtr msg)
+{
+  // Only update if we have an active trajectory
+  if (!_current_index) {
+    return;
+  }
+
+  // Check if mission manager's current index has changed
+  const uint16_t new_current_index = msg->data;
+  
+  // Update our tracking index if it changed
+  if (new_current_index != *_current_index && 
+      new_current_index >= _current_trajectory.start_index &&
+      new_current_index <= _current_trajectory.end_index) {
+    
+    RCLCPP_INFO(_node.get_logger(), 
+                "Mission index updated from %d to %d - updating rover setpoint",
+                *_current_index, new_current_index);
+    
+    _current_index = new_current_index;
+    
+    // Immediately update the setpoint for the new waypoint
+    updateSetpoint();
+  }
 }
 
 }  // namespace px4_ros2::multicopter
