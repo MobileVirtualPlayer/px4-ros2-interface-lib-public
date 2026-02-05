@@ -15,6 +15,7 @@
 #include <px4_ros2/odometry/global_position.hpp>
 #include <px4_ros2/vehicle_state/vehicle_status.hpp>
 #include <std_msgs/msg/u_int16.hpp>
+#include <std_msgs/msg/float32.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 /** \ingroup mission_multicopter
@@ -43,6 +44,7 @@ class WaypointTrajectoryExecutor : public TrajectoryExecutorInterface {
   bool headingReached(float target_heading_rad) const;
   bool isRover() const;
   void missionCurrentCallback(std_msgs::msg::UInt16::ConstSharedPtr msg);
+  void missionSpeedCallback(std_msgs::msg::Float32::ConstSharedPtr msg);
 
   TrajectoryConfig _current_trajectory;
   const float _acceptance_radius;
@@ -55,6 +57,8 @@ class WaypointTrajectoryExecutor : public TrajectoryExecutorInterface {
   std::optional<int> _current_index;
   rclcpp::Node& _node;
   rclcpp::Subscription<std_msgs::msg::UInt16>::SharedPtr _mission_current_sub;
+  rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr _mission_speed_sub;
+  std::optional<float> _mission_speed;
 };
 
 }  // namespace px4_ros2::multicopter

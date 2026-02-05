@@ -26,6 +26,14 @@ WaypointTrajectoryExecutor::WaypointTrajectoryExecutor(ModeBase& mode, float acc
       [this](std_msgs::msg::UInt16::ConstSharedPtr msg) {
         missionCurrentCallback(msg);
       });
+  
+  // Subscribe to mission speed from mission_manager
+  _mission_speed_sub = mode.node().create_subscription<std_msgs::msg::Float32>(
+      "/mission/speed",
+      rclcpp::QoS(10).transient_local(),
+      [this](std_msgs::msg::Float32::ConstSharedPtr msg) {
+        missionSpeedCallback(msg);
+      });
 }
 
 bool WaypointTrajectoryExecutor::navigationItemTypeSupported(NavigationItemType type)
@@ -84,8 +92,8 @@ void WaypointTrajectoryExecutor::updateSetpoint()
     Eigen::Vector2f target_local_2d = _map_projection->globalToLocal(
         Eigen::Vector2d(target_position[0], target_position[1]));
     
-    // Use horizontal velocity as cruising speed
-    std::optional<float> cruising_speed = options.horizontal_velocity;
+    // Use mission speed if available, otherwise fall back to horizontal velocity
+    std::optional<float> cruising_speed = _mission_speed.has_value() ? _mission_speed : options.horizontal_velocity;
     std::optional<float> arrival_speed = std::nullopt;  // Stop at waypoint
     
     _rover_setpoint->update(target_local_2d, std::nullopt, cruising_speed, arrival_speed, heading_target_rad);
@@ -161,6 +169,13 @@ void WaypointTrajectoryExecutor::missionCurrentCallback(
     // Immediately update the setpoint for the new waypoint
     updateSetpoint();
   }
+}
+
+void WaypointTrajectoryExecutor::missionSpeedCallback(
+    std_msgs::msg::Float32::ConstSharedPtr msg)
+{
+  _mission_speed = msg->data;
+  RCLCPP_DEBUG(_node.get_logger(), "Mission speed updated to: %.2f m/s", *_mission_speed);
 }
 
 }  // namespace px4_ros2::multicopter
