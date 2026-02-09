@@ -5,6 +5,7 @@
 
 #include <px4_ros2/mission/trajectory/multicopter/waypoint_trajectory_executor.hpp>
 #include <px4_ros2/utils/message_version.hpp>
+#include <px4_ros2/utils/geometry.hpp>
 
 using namespace px4_ros2::literals;  // NOLINT
 
@@ -50,6 +51,7 @@ void WaypointTrajectoryExecutor::runTrajectory(const TrajectoryConfig& config)
 {
   _current_trajectory = config;
   _current_index = config.start_index;
+  _previous_waypoint_ned.reset();  // Reset previous waypoint for new trajectory
 }
 
 void WaypointTrajectoryExecutor::updateSetpoint()
@@ -94,9 +96,8 @@ void WaypointTrajectoryExecutor::updateSetpoint()
     
     // Use mission speed if available, otherwise fall back to horizontal velocity
     std::optional<float> cruising_speed = _mission_speed.has_value() ? _mission_speed : options.horizontal_velocity;
-    std::optional<float> arrival_speed = std::nullopt;  // Stop at waypoint
     
-    _rover_setpoint->update(target_local_2d, std::nullopt, cruising_speed, arrival_speed, heading_target_rad);
+    _rover_setpoint->update(target_local_2d, std::nullopt, cruising_speed, std::nullopt, std::nullopt);
   } else {
     // Multicopter: Use 3D goto setpoint with global coordinates
     _multicopter_setpoint->update(target_position, heading_target_rad, options.horizontal_velocity,
@@ -109,6 +110,9 @@ void WaypointTrajectoryExecutor::updateSetpoint()
   }
 
   if (positionReached(target_position, acceptance_radius)) {
+    RCLCPP_INFO(_node.get_logger(), 
+                "Waypoint %d reached (error < %.2f m) - transitioning to next waypoint",
+                *_current_index, acceptance_radius);
     continueNextItem();
   }
 }
@@ -118,7 +122,10 @@ void WaypointTrajectoryExecutor::continueNextItem()
   const int index_reached = *_current_index;
   _current_index = *_current_index + 1;
   if (*_current_index > _current_trajectory.end_index) {
+    RCLCPP_INFO(_node.get_logger(), "All waypoints completed - ending trajectory");
     _current_index.reset();
+  } else {
+    RCLCPP_INFO(_node.get_logger(), "Moving to waypoint %d", *_current_index);
   }
   // Call the callback after updating the state (as it might set a new trajectory already)
   _current_trajectory.on_index_reached(index_reached);
@@ -127,7 +134,9 @@ void WaypointTrajectoryExecutor::continueNextItem()
 bool WaypointTrajectoryExecutor::positionReached(const Eigen::Vector3d& target_position_m,
                                                  float acceptance_radius) const
 {
-  const float position_error =
+  // Rovers use horizontal distance only, multicopters use 3D distance
+  const float position_error = isRover() ?
+      horizontalDistanceToGlobalPosition(_vehicle_global_position->position(), target_position_m) :
       distanceToGlobalPosition(_vehicle_global_position->position(), target_position_m);
   return position_error < acceptance_radius;
 }

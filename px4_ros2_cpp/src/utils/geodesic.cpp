@@ -39,7 +39,7 @@ void MapProjection::vehicleLocalPositionCallback(
   } else if (timestamp_cur != timestamp_ref) {
     // Update reference point if it has changed
     _map_projection_math->initReference(msg->ref_lat, msg->ref_lon, msg->ref_alt, timestamp_cur);
-    RCLCPP_WARN(_node.get_logger(), "Map projection reference point has been reset.");
+    RCLCPP_DEBUG(_node.get_logger(), "Map projection reference point has been reset.");
   }
 }
 
