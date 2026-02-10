@@ -51,7 +51,18 @@ void WaypointTrajectoryExecutor::runTrajectory(const TrajectoryConfig& config)
 {
   _current_trajectory = config;
   _current_index = config.start_index;
-  _previous_waypoint_ned.reset();  // Reset previous waypoint for new trajectory
+  
+  // Capture the rover's current position as the start point for the first waypoint
+  if (isRover() && _vehicle_global_position->positionValid()) {
+    const Eigen::Vector3d& current_global_pos = _vehicle_global_position->position();
+    _previous_waypoint_ned = _map_projection->globalToLocal(
+        Eigen::Vector2d(current_global_pos[0], current_global_pos[1]));
+    RCLCPP_DEBUG(_node.get_logger(), 
+                 "Starting trajectory - rover start position: N=%.2f, E=%.2f",
+                 (*_previous_waypoint_ned)[0], (*_previous_waypoint_ned)[1]);
+  } else {
+    _previous_waypoint_ned.reset();  // Reset for multicopters or if position not valid
+  }
 }
 
 void WaypointTrajectoryExecutor::updateSetpoint()
@@ -97,7 +108,52 @@ void WaypointTrajectoryExecutor::updateSetpoint()
     // Use mission speed if available, otherwise fall back to horizontal velocity
     std::optional<float> cruising_speed = _mission_speed.has_value() ? _mission_speed : options.horizontal_velocity;
     
-    _rover_setpoint->update(target_local_2d, std::nullopt, cruising_speed, std::nullopt, std::nullopt);
+    // Determine arrival speed by looking ahead to the next waypoint
+    std::optional<float> arrival_speed;
+    if (cruising_speed.has_value() && *_current_index + 1 <= _current_trajectory.end_index) {
+      // Get the next waypoint
+      const auto* next_navigation_item =
+          std::get_if<NavigationItem>(&_current_trajectory.trajectory->items()[*_current_index + 1]);
+      
+      if (next_navigation_item) {
+        const auto& next_waypoint = std::get<Waypoint>(next_navigation_item->data);
+        const Eigen::Vector3d& next_position = next_waypoint.coordinate;
+        
+        // Calculate bearing from current waypoint to next waypoint
+        const float bearing_current_to_next = headingToGlobalPosition(target_position, next_position);
+        
+        // Calculate bearing from rover's position to current waypoint
+        const float bearing_to_current = headingToGlobalPosition(
+            _vehicle_global_position->position(), target_position);
+        
+        // Calculate the turn angle at the current waypoint
+        const float turn_angle = fabsf(wrapPi(bearing_current_to_next - bearing_to_current));
+        
+        // If rover needs to turn more than 90 degrees at arrival, it should stop for pivot turn
+        static constexpr float kPivotTurnThreshold = M_PI_2;  // 90 degrees
+        if (turn_angle > kPivotTurnThreshold) {
+          arrival_speed = 0.0f;
+          RCLCPP_DEBUG(_node.get_logger(), 
+                       "[DEBUG] Sharp turn ahead (%.1f°) - arrival_speed = 0 (pivot turn)", 
+                       turn_angle * 180.0f / M_PI);
+        } else {
+          arrival_speed = *cruising_speed;
+          RCLCPP_DEBUG(_node.get_logger(), 
+                       "[DEBUG] Gentle turn ahead (%.1f°) - arrival_speed = %.2f m/s", 
+                       turn_angle * 180.0f / M_PI, *arrival_speed);
+        }
+      } else {
+        // Next item is not a navigation waypoint (might be an action), maintain speed
+        arrival_speed = *cruising_speed;
+      }
+    } else {
+      // This is the last waypoint, slow to a stop
+      arrival_speed = 0.0f;
+      RCLCPP_DEBUG(_node.get_logger(), "[DEBUG] Last waypoint - arrival_speed = 0");
+    }
+    
+    // Use the previous waypoint position as start_ned if available
+    _rover_setpoint->update(target_local_2d, _previous_waypoint_ned, cruising_speed, arrival_speed, std::nullopt);
   } else {
     // Multicopter: Use 3D goto setpoint with global coordinates
     _multicopter_setpoint->update(target_position, heading_target_rad, options.horizontal_velocity,
@@ -120,6 +176,18 @@ void WaypointTrajectoryExecutor::updateSetpoint()
 void WaypointTrajectoryExecutor::continueNextItem()
 {
   const int index_reached = *_current_index;
+  
+  // Capture the rover's current position in NED before moving to the next waypoint
+  // This will be used as start_ned for the next waypoint
+  if (isRover() && _vehicle_global_position->positionValid()) {
+    const Eigen::Vector3d& current_global_pos = _vehicle_global_position->position();
+    _previous_waypoint_ned = _map_projection->globalToLocal(
+        Eigen::Vector2d(current_global_pos[0], current_global_pos[1]));
+    RCLCPP_DEBUG(_node.get_logger(), 
+                 "Captured rover start position: N=%.2f, E=%.2f",
+                 (*_previous_waypoint_ned)[0], (*_previous_waypoint_ned)[1]);
+  }
+  
   _current_index = *_current_index + 1;
   if (*_current_index > _current_trajectory.end_index) {
     RCLCPP_INFO(_node.get_logger(), "All waypoints completed - ending trajectory");
@@ -170,8 +238,15 @@ void WaypointTrajectoryExecutor::missionCurrentCallback(
       new_current_index <= _current_trajectory.end_index) {
     
     RCLCPP_INFO(_node.get_logger(), 
-                "Mission index updated from %d to %d - updating rover setpoint",
+                "Mission index updated from %d to %d - updating setpoint",
                 *_current_index, new_current_index);
+    
+    // Capture the rover's current position before jumping to the new waypoint
+    if (isRover() && _vehicle_global_position->positionValid()) {
+      const Eigen::Vector3d& current_global_pos = _vehicle_global_position->position();
+      _previous_waypoint_ned = _map_projection->globalToLocal(
+          Eigen::Vector2d(current_global_pos[0], current_global_pos[1]));
+    }
     
     _current_index = new_current_index;
     
