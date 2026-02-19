@@ -79,10 +79,33 @@ void WaypointTrajectoryExecutor::updateSetpoint()
   }
 
   if (!_vehicle_global_position->positionValid()) {
-    RCLCPP_ERROR(_node.get_logger(), "Global position not valid, aborting");
+    static constexpr double kPositionGracePeriodS = 5.0;
+    if (!_position_invalid_since.has_value()) {
+      _position_invalid_since = _node.get_clock()->now();
+    }
+    const double invalid_s =
+        (_node.get_clock()->now() - *_position_invalid_since).seconds();
+    if (invalid_s < kPositionGracePeriodS) {
+      RCLCPP_WARN_THROTTLE(_node.get_logger(), *_node.get_clock(), 1000,
+                           "Waiting for valid global position (%.1fs / %.1fs)...",
+                           invalid_s, kPositionGracePeriodS);
+      return;
+    }
+    const bool msg_fresh = _vehicle_global_position->lastValid();
+    bool lat_lon_valid = false;
+    bool alt_valid = false;
+    if (msg_fresh) {
+      lat_lon_valid = _vehicle_global_position->last().lat_lon_valid;
+      alt_valid = _vehicle_global_position->last().alt_valid;
+    }
+    RCLCPP_ERROR(_node.get_logger(),
+                 "Global position not valid after %.1fs grace period "
+                 "(msg_fresh=%d lat_lon_valid=%d alt_valid=%d), aborting",
+                 invalid_s, msg_fresh, lat_lon_valid, alt_valid);
     _current_trajectory.on_failure();
     return;
   }
+  _position_invalid_since.reset();
 
   const auto& waypoint = std::get<Waypoint>(navigation_item->data);
   const Eigen::Vector3d& target_position = waypoint.coordinate;

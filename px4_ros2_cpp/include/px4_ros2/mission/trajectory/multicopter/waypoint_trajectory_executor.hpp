@@ -60,6 +60,7 @@ class WaypointTrajectoryExecutor : public TrajectoryExecutorInterface {
   rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr _mission_speed_sub;
   std::optional<float> _mission_speed;
   std::optional<Eigen::Vector2f> _previous_waypoint_ned;  // Track previous waypoint for start_ned
+  std::optional<rclcpp::Time> _position_invalid_since;    // Grace period for DDS startup delay
 };
 
 }  // namespace px4_ros2::multicopter
