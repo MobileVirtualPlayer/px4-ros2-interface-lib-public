@@ -220,6 +220,23 @@ void MissionExecutor::abort()
   }
 }
 
+void MissionExecutor::skipToMissionIndex(int index)
+{
+  if (!_is_active) {
+    _state.current_index = index;
+    return;
+  }
+  // Invalidate the current action handler so any in-flight trajectory/action callbacks
+  // from the old segment are silently discarded.
+  invalidateActionHandler();
+  // Update state and fire the progress-update callback (notifies mission_protocol).
+  setCurrentMissionIndex(index);
+  // Stop any running custom actions.
+  deactivateAllActions();
+  // Begin executing from the new index immediately.
+  runCurrentMissionItem(false);
+}
+
 bool MissionExecutor::doRegister()
 {
   return doRegisterImpl(*_mode, *_mode_executor);

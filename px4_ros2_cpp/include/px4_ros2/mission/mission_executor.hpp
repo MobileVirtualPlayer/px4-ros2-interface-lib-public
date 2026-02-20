@@ -79,6 +79,16 @@ class MissionExecutor {
   void setMission(const Mission& mission);
   void resetMission();
 
+  /**
+   * @brief Jump to a specific mission index, even while the mission is active.
+   *
+   * When called while active, interrupts the current trajectory/action and begins
+   * executing from the requested index. When called while inactive, simply records
+   * the desired start index (equivalent to pre-loading the persistent state).
+   * @param index Zero-based index into the mission items.
+   */
+  void skipToMissionIndex(int index);
+
   const Mission& mission() const { return *_mission; }
 
   void onActivated(const std::function<void()>& callback) { _on_activated = callback; }
