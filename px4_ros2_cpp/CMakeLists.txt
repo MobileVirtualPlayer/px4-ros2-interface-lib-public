@@ -159,6 +159,7 @@ add_library(px4_ros2_cpp
         src/odometry/local_position.cpp
         src/utils/geodesic.cpp
         src/utils/map_projection_impl.cpp
+        src/obstacle/obstacle_distance.cpp
 )
 add_dependencies(px4_ros2_cpp generate_px4_header)
 target_include_directories(px4_ros2_cpp PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}>)
